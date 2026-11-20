@@ -1,0 +1,15 @@
+[Unit]
+Description=Poxydator Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/poxydatorbot
+EnvironmentFile=/opt/poxydatorbot/.env
+ExecStart=/opt/poxydatorbot/venv/bin/python -m bot.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
