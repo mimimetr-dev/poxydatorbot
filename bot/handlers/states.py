@@ -9,6 +9,8 @@ class OnboardingStates(StatesGroup):
     waiting_for_weight = State()
     waiting_for_waist = State()
     waiting_for_target = State()
+    waiting_for_activity = State()
+    waiting_for_deficit = State()
 
 class MeasurementStates(StatesGroup):
     waiting_for_monthly_data = State()

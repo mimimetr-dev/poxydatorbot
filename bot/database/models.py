@@ -24,6 +24,10 @@ class User(Base):
     daily_calories_target = Column(Integer, default=1800, nullable=False)
     daily_protein_target = Column(Integer, default=120, nullable=False)
 
+    # Mifflin-St Jeor inputs, persisted for future recalculations
+    activity_coefficient = Column(Float, default=1.2, nullable=False)
+    deficit_percent = Column(Integer, default=20, nullable=False)
+
     is_onboarded = Column(Boolean, default=False, nullable=False)
     has_active_subscription = Column(Boolean, default=True, nullable=False)
 

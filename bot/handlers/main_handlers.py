@@ -86,7 +86,7 @@ async def _ask_time(message: Message, state: FSMContext):
     await state.set_state(OnboardingStates.waiting_for_time)
     await message.answer(
         "Отлично, поехали! 🚀\n\n"
-        "**Шаг 1 из 7. Сколько у тебя сейчас времени?**\n"
+        "**Шаг 1 из 9. Сколько у тебя сейчас времени?**\n"
         "Напиши, например, `14:35` — по разнице с серверным временем я определю твой часовой пояс "
         "и буду присылать вечерние итоги именно по твоим часам."
     )
@@ -134,7 +134,7 @@ async def process_time(message: Message, state: FSMContext):
     await state.set_state(OnboardingStates.waiting_for_gender)
     await message.answer(
         f"Супер! Определил твой часовой пояс: **{tz_name}** (UTC{'+' if offset>=0 else ''}{offset:g}ч).\n\n"
-        "**Шаг 2 из 7.** Укажи твой пол:",
+        "**Шаг 2 из 9.** Укажи твой пол:",
         reply_markup=kb
     )
 
@@ -145,7 +145,7 @@ async def process_gender(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_reply_markup(reply_markup=None)
     
     await state.set_state(OnboardingStates.waiting_for_age)
-    await callback.message.answer("**Шаг 3 из 7.** Сколько тебе полных лет?")
+    await callback.message.answer("**Шаг 3 из 9.** Сколько тебе полных лет?")
 
 @router.message(OnboardingStates.waiting_for_age)
 async def process_age(message: Message, state: FSMContext):
@@ -159,7 +159,7 @@ async def process_age(message: Message, state: FSMContext):
 
     await state.update_data(age=age)
     await state.set_state(OnboardingStates.waiting_for_height)
-    await message.answer("**Шаг 4 из 7.** Твой рост в сантиметрах (например, `178`):")
+    await message.answer("**Шаг 4 из 9.** Твой рост в сантиметрах (например, `178`):")
 
 @router.message(OnboardingStates.waiting_for_height)
 async def process_height(message: Message, state: FSMContext):
@@ -173,7 +173,7 @@ async def process_height(message: Message, state: FSMContext):
 
     await state.update_data(height=height)
     await state.set_state(OnboardingStates.waiting_for_weight)
-    await message.answer("**Шаг 5 из 7.** Текущий вес в килограммах (например, `84.5`):")
+    await message.answer("**Шаг 5 из 9.** Текущий вес в килограммах (например, `84.5`):")
 
 @router.message(OnboardingStates.waiting_for_weight)
 async def process_weight(message: Message, state: FSMContext):
@@ -187,7 +187,7 @@ async def process_weight(message: Message, state: FSMContext):
 
     await state.update_data(weight=weight)
     await state.set_state(OnboardingStates.waiting_for_waist)
-    await message.answer("**Шаг 6 из 7.** Обхват талии в сантиметрах (в самом узком месте или на уровне пупка, например `92`):")
+    await message.answer("**Шаг 6 из 9.** Обхват талии в сантиметрах (в самом узком месте или на уровне пупка, например `92`):")
 
 @router.message(OnboardingStates.waiting_for_waist)
 async def process_waist(message: Message, state: FSMContext):
@@ -201,7 +201,7 @@ async def process_waist(message: Message, state: FSMContext):
 
     await state.update_data(waist=waist)
     await state.set_state(OnboardingStates.waiting_for_target)
-    await message.answer("**Шаг 7 из 7.** Какой твой целевой желаемый вес в кг?")
+    await message.answer("**Шаг 7 из 9.** Какой твой целевой желаемый вес в кг?")
 
 @router.message(OnboardingStates.waiting_for_target)
 async def process_target(message: Message, state: FSMContext):
@@ -213,18 +213,103 @@ async def process_target(message: Message, state: FSMContext):
         await message.answer("Введи целевой вес числом (например, `72`):")
         return
 
+    await state.update_data(target_weight=target_weight)
+    await state.set_state(OnboardingStates.waiting_for_activity)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1.2 — сидячий образ жизни", callback_data="act_1.2")],
+        [InlineKeyboardButton(text="1.375 — лёгкая активность", callback_data="act_1.375")],
+        [InlineKeyboardButton(text="1.55 — средняя активность", callback_data="act_1.55")],
+        [InlineKeyboardButton(text="1.725 — высокая активность", callback_data="act_1.725")],
+        [InlineKeyboardButton(text="1.9 — очень высокая", callback_data="act_1.9")],
+    ])
+    await message.answer(
+        "**Шаг 8 из 9. Твой уровень повседневной активности**\n\n"
+        "Это не про спортзал, а про то, сколько ты двигаешься в обычной жизни — "
+        "этот коэффициент умножается на базовый метаболизм.\n\n"
+        "• **1.2** — офис/дом, минимум движения\n"
+        "• **1.375** — лёгкая активность: много ходьбы, 1–3 тренировки в неделю\n"
+        "• **1.55** — средняя: 3–5 тренировок в неделю\n"
+        "• **1.725** — высокая: 6–7 тренировок\n"
+        "• **1.9** — очень высокая: физический труд + тренировки\n\n"
+        "Выбери подходящий вариант:",
+        reply_markup=kb
+    )
+
+
+@router.callback_query(OnboardingStates.waiting_for_activity, F.data.startswith("act_"))
+async def process_activity(callback: CallbackQuery, state: FSMContext):
+    try:
+        activity = float(callback.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Не понял коэффициент, выбери ещё раз")
+        return
+
+    await callback.answer()
+    await state.update_data(activity=activity)
+    with contextlib.suppress(Exception):
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+    await state.set_state(OnboardingStates.waiting_for_deficit)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="15% — мягкий и комфортный", callback_data="def_15")],
+        [InlineKeyboardButton(text="20% — стандартный", callback_data="def_20")],
+    ])
+    await callback.message.answer(
+        "**Шаг 9 из 9. Размер дефицита калорий**\n\n"
+        "Безопасный диапазон — **15–20%** от суточного расхода:\n"
+        "• **15%** — медленнее, но легче переносится, меньше срывов\n"
+        "• **20%** — быстрее результат, но требует дисциплины\n\n"
+        "Выбери:",
+        reply_markup=kb
+    )
+
+
+@router.callback_query(OnboardingStates.waiting_for_deficit, F.data.startswith("def_"))
+async def process_deficit(callback: CallbackQuery, state: FSMContext):
+    try:
+        deficit_percent = int(callback.data.split("_")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Не понял, выбери ещё раз")
+        return
+
+    await callback.answer()
+    await state.update_data(deficit=deficit_percent)
+    with contextlib.suppress(Exception):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await finish_onboarding(callback.message, state)
+
+
+async def finish_onboarding(message: Message, state: FSMContext):
     data = await state.get_data()
-    user_id = message.from_user.id
-    
-    # Calculate Mifflin-St Jeor TDEE with sedentary activity (1.2) - comfortable deficit (20%)
-    # BMR:
-    # Male: 10 * weight + 6.25 * height - 5 * age + 5
-    # Female: 10 * weight + 6.25 * height - 5 * age - 161
+    user_id = message.chat.id
+
+    weight = data["weight"]
+    height = data["height"]
+    age = data["age"]
+    activity = data.get("activity", 1.2)
+    deficit_percent = data.get("deficit", 20)
+    target_weight = data.get("target_weight")
+
+    # --- Mifflin-St Jeor BMR ---
+    # Male:   10*weight + 6.25*height - 5*age + 5
+    # Female: 10*weight + 6.25*height - 5*age - 161
     is_male = (data["gender"] == "male")
-    bmr = 10 * data["weight"] + 6.25 * data["height"] - 5 * data["age"] + (5 if is_male else -161)
-    tdee = bmr * 1.2
-    target_calories = int(tdee * 0.8) # 20% deficit
-    protein_target = int(data["weight"] * 1.5)
+    bmr = 10 * weight + 6.25 * height - 5 * age + (5 if is_male else -161)
+
+    # --- TDEE = BMR * activity coefficient ---
+    tdee = bmr * activity
+
+    # --- Safe deficit 15-20% ---
+    deficit_percent = min(20, max(15, deficit_percent))
+    raw_target = tdee * (1 - deficit_percent / 100.0)
+
+    # Safety floor (never go below healthy minimum)
+    floor = 1500 if is_male else 1200
+    floor_applied = raw_target < floor
+    target_calories = int(round(max(raw_target, floor) / 10.0) * 10)
+
+    protein_target = int(round(weight * 1.6))
 
     today = date.today()
     next_checkin = today + timedelta(days=30)
@@ -234,9 +319,11 @@ async def process_target(message: Message, state: FSMContext):
         user.timezone = data["timezone"]
         user.utc_offset_hours = data["offset"]
         user.gender = data["gender"]
-        user.age = data["age"]
-        user.height_cm = data["height"]
+        user.age = age
+        user.height_cm = height
         user.target_weight_kg = target_weight
+        user.activity_coefficient = activity
+        user.deficit_percent = deficit_percent
         user.daily_calories_target = target_calories
         user.daily_protein_target = protein_target
         user.is_onboarded = True
@@ -245,7 +332,7 @@ async def process_target(message: Message, state: FSMContext):
         measurement = Measurement(
             telegram_id=user_id,
             date=today,
-            weight_kg=data["weight"],
+            weight_kg=weight,
             waist_cm=data["waist"],
             note="Стартовые замеры"
         )
@@ -253,13 +340,26 @@ async def process_target(message: Message, state: FSMContext):
         await session.commit()
 
     await state.clear()
+
+    floor_note = ""
+    if floor_applied:
+        floor_note = (
+            f"\n⚠️ Расчётный дефицит ниже безопасного минимума, поэтому норма поднята "
+            f"до {floor} ккал — ниже опускаться не стоит.\n"
+        )
+
     await message.answer(
         f"🎯 **Твой персональный план готов!**\n\n"
-        f"• Базовый расход: ~{int(tdee)} ккал\n"
-        f"• **Дневная норма с дефицитом: {target_calories} ккал**\n"
-        f"• Рекомендуемый белок: ~{protein_target} г (для чувства сытости)\n"
-        f"• Цель: с {data['weight']} кг до {target_weight} кг\n\n"
-        f"📅 **Следующий замер веса и талии:** {next_checkin.strftime('%d.%m.%Y')} (ровно через 30 дней).\n\n"
+        f"**Расчёт по формуле Миффлина — Сан Жеора:**\n"
+        f"• Базовый метаболизм (BMR): **{int(bmr)} ккал**\n"
+        f"• Коэффициент активности: **{activity:g}**\n"
+        f"• Суточный расход (TDEE): **{int(tdee)} ккал**\n"
+        f"• Дефицит: **{deficit_percent}%** ({int(tdee - target_calories)} ккал)\n"
+        f"• **Дневная норма: {target_calories} ккал**\n"
+        f"• Белок для сытости: ~{protein_target} г\n"
+        f"{floor_note}\n"
+        f"🎯 Цель: с {weight:g} кг до {target_weight:g} кг\n\n"
+        f"📅 **Следующий замер веса и талии:** {next_checkin.strftime('%d.%m.%Y')} (через 30 дней).\n\n"
         "Теперь просто присылай мне в любое время:\n"
         "📸 **Фото блюда**\n"
         "🎙 **Голосовое сообщение**\n"
