@@ -6,6 +6,20 @@ from bot.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+def extract_gemini_text(candidate: Dict[str, Any]) -> str:
+    """Joins all text parts of a Gemini candidate, skipping thought parts."""
+    parts = (candidate.get("content") or {}).get("parts") or []
+    chunks = []
+    for part in parts:
+        if part.get("thought"):
+            continue
+        chunk = part.get("text")
+        if chunk:
+            chunks.append(chunk)
+    return "\n".join(chunks).strip()
+
+
 class LLMService:
     def __init__(self):
         self.base_url = settings.COMETAPI_BASE_URL.rstrip("/")
@@ -93,7 +107,7 @@ class LLMService:
                 tools=tools
             )
             candidate = res.get("candidates", [{}])[0]
-            text = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
+            text = extract_gemini_text(candidate)
             usage = res.get("usageMetadata", {})
             p_tokens = usage.get("promptTokenCount", 0)
             c_tokens = usage.get("candidatesTokenCount", 0)

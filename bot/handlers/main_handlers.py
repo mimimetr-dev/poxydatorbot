@@ -1,4 +1,4 @@
-import base64
+﻿import base64
 import json
 import logging
 from datetime import date, datetime, timedelta
@@ -12,7 +12,7 @@ from bot.config import settings
 from bot.database.db import AsyncSessionLocal
 from bot.database.models import User, Measurement, Meal, DailySummary, TokenUsage
 from bot.handlers.states import OnboardingStates, MeasurementStates
-from bot.services.llm import llm_service
+from bot.services import nutrition as nutrition_service
 from bot.services.time_utils import calculate_offset_from_user_time, find_timezone_by_offset, get_user_now
 
 logger = logging.getLogger(__name__)
@@ -348,151 +348,131 @@ async def process_monthly_measurement(message: Message, state: FSMContext):
 
 # --- MEAL INPUT: PHOTO, VOICE, TEXT ---
 
-NUTRITION_SYSTEM_PROMPT = """Ты строгий и точный персональный нутрициолог.
-Твоя цель: оценить калорийность и состав блюда пользователя с максимальной точностью.
-Фокус ТОЛЬКО на дефиците калорий.
-Ответь СТРОГО в формате валидного JSON (без лишних оберток Markdown):
-{
-  "dish_name": "Название блюда и порция",
-  "calories": 450,
-  "protein": 25.0,
-  "fat": 15.0,
-  "carbs": 50.0,
-  "comment": "Краткий ободряющий комментарий (1-2 предложения)"
-}
-Если по фото или описанию калорийность трудно определить точно, сделай реалистичную среднюю оценку.
-"""
+def format_meal_card(parsed: dict, cals_today: int, target: int, icon: str, prefix: str = "Записал") -> str:
+    rem = target - cals_today
+    search_note = ""
+    if "поиск" in (parsed.get("comment") or "").lower() or "Нашёл" in (parsed.get("comment") or ""):
+        search_note = "\n🌐 _Данные уточнены через Google-поиск._"
+    return (
+        f"{icon} {prefix}: **{parsed['dish_name']}**\n"
+        f"• Калории: **+{parsed['calories']} ккал**\n"
+        f"• БЖУ: Б: {parsed['protein']}г | Ж: {parsed['fat']}г | У: {parsed['carbs']}г\n\n"
+        f"💬 _{parsed['comment']}_"
+        f"{search_note}\n\n"
+        f"📊 На сегодня: **{cals_today} / {target} ккал** (осталось {rem} ккал)"
+    )
+
+
+async def process_food(
+    message: Message,
+    parts: list,
+    input_type: str,
+    raw_query: str,
+    action_type: str,
+    icon: str,
+    prefix: str,
+    status_msg: Message | None = None
+):
+    """Common pipeline: analyze -> log tokens -> save meal or answer a question."""
+    user_id = message.from_user.id
+    try:
+        parsed, usages = await nutrition_service.analyze(parts, action_type=action_type)
+
+        async with AsyncSessionLocal() as session:
+            for u in usages:
+                await log_token_usage(session, user_id, u["model"], u["tokens"], u["action"])
+
+            if not parsed["is_food"]:
+                answer = parsed.get("answer") or parsed.get("comment") or "Уточни, пожалуйста, вопрос."
+                if status_msg:
+                    await status_msg.edit_text(answer)
+                else:
+                    await message.answer(answer)
+                return
+
+            user = await session.get(User, user_id)
+            if not user:
+                return
+            await save_meal(session, user_id, input_type, raw_query, parsed)
+            user_now = get_user_now(user.timezone)
+            cals_today = await get_today_calories(session, user_id, user_now.date())
+            card = format_meal_card(parsed, cals_today, user.daily_calories_target, icon, prefix)
+
+        if status_msg:
+            await status_msg.edit_text(card)
+        else:
+            await message.answer(card)
+
+    except Exception as e:
+        logger.error(f"Error handling {action_type}: {e}")
+        text = "Не получилось обработать запись. Попробуй сформулировать иначе."
+        if status_msg:
+            await status_msg.edit_text(text)
+        else:
+            await message.answer(text)
+
 
 @router.message(F.photo)
 async def handle_food_photo(message: Message):
     status_msg = await message.answer("🔍 Анализирую фото еды...")
-    user_id = message.from_user.id
-    photo = message.photo[-1] # Largest photo
-    
+    photo = message.photo[-1]
+
     file_info = await message.bot.get_file(photo.file_id)
     file_bytes = await message.bot.download_file(file_info.file_path)
     b64_img = base64.b64encode(file_bytes.read()).decode("utf-8")
 
     parts = [
         {"text": message.caption or "Определи блюдо на фото и рассчитай калории и БЖУ."},
-        {
-            "inlineData": {
-                "mimeType": "image/jpeg",
-                "data": b64_img
-            }
-        }
+        {"inlineData": {"mimeType": "image/jpeg", "data": b64_img}}
     ]
 
-    try:
-        res = await llm_service.generate_response(
-            contents_or_parts=parts,
-            system_instruction=NUTRITION_SYSTEM_PROMPT,
-            action_type="meal_photo",
-            enable_web_search=True
-        )
-        parsed = clean_and_parse_json(res["text"])
-        
-        async with AsyncSessionLocal() as session:
-            await log_token_usage(session, user_id, res["model_used"], res["tokens"], "meal_photo")
-            await save_meal(session, user_id, "photo", message.caption, parsed)
-            user = await session.get(User, user_id)
-            user_now = get_user_now(user.timezone)
-            cals_today = await get_today_calories(session, user_id, user_now.date())
+    await process_food(
+        message, parts,
+        input_type="photo",
+        raw_query=message.caption or "[Фото]",
+        action_type="meal_photo",
+        icon="🍽",
+        prefix="На фото",
+        status_msg=status_msg
+    )
 
-        rem = user.daily_calories_target - cals_today
-        await status_msg.edit_text(
-            f"🍽 **{parsed['dish_name']}**\n"
-            f"• Калории: **+{parsed['calories']} ккал**\n"
-            f"• БЖУ: Б: {parsed['protein']}г | Ж: {parsed['fat']}г | У: {parsed['carbs']}г\n\n"
-            f"💬 _{parsed['comment']}_\n\n"
-            f"📊 На сегодня: **{cals_today} / {user.daily_calories_target} ккал** (осталось {rem} ккал)"
-        )
-    except Exception as e:
-        logger.error(f"Error handling photo: {e}")
-        await status_msg.edit_text("Не удалось распознать фото. Попробуй описать текстом или прислать другое фото.")
 
 @router.message(F.voice)
 async def handle_food_voice(message: Message):
     status_msg = await message.answer("🎙 Слушаю голосовое...")
-    user_id = message.from_user.id
     voice = message.voice
-    
+
     file_info = await message.bot.get_file(voice.file_id)
     file_bytes = await message.bot.download_file(file_info.file_path)
     b64_audio = base64.b64encode(file_bytes.read()).decode("utf-8")
 
     parts = [
-        {"text": "Распознай аудиосообщение о съеденной еде, посчитай калории и БЖУ."},
-        {
-            "inlineData": {
-                "mimeType": "audio/ogg",
-                "data": b64_audio
-            }
-        }
+        {"text": "Распознай аудиосообщение о съеденной еде и посчитай калории и БЖУ."},
+        {"inlineData": {"mimeType": "audio/ogg", "data": b64_audio}}
     ]
 
-    try:
-        res = await llm_service.generate_response(
-            contents_or_parts=parts,
-            system_instruction=NUTRITION_SYSTEM_PROMPT,
-            action_type="meal_voice",
-            enable_web_search=True
-        )
-        parsed = clean_and_parse_json(res["text"])
+    await process_food(
+        message, parts,
+        input_type="voice",
+        raw_query="[Голосовое сообщение]",
+        action_type="meal_voice",
+        icon="🎙",
+        prefix="Услышал",
+        status_msg=status_msg
+    )
 
-        async with AsyncSessionLocal() as session:
-            await log_token_usage(session, user_id, res["model_used"], res["tokens"], "meal_voice")
-            await save_meal(session, user_id, "voice", "[Голосовое сообщение]", parsed)
-            user = await session.get(User, user_id)
-            user_now = get_user_now(user.timezone)
-            cals_today = await get_today_calories(session, user_id, user_now.date())
-
-        rem = user.daily_calories_target - cals_today
-        await status_msg.edit_text(
-            f"🎙 Распознано: **{parsed['dish_name']}**\n"
-            f"• Калории: **+{parsed['calories']} ккал**\n"
-            f"• БЖУ: Б: {parsed['protein']}г | Ж: {parsed['fat']}г | У: {parsed['carbs']}г\n\n"
-            f"💬 _{parsed['comment']}_\n\n"
-            f"📊 На сегодня: **{cals_today} / {user.daily_calories_target} ккал** (осталось {rem} ккал)"
-        )
-    except Exception as e:
-        logger.error(f"Error handling voice: {e}")
-        await status_msg.edit_text("Не удалось разобрать голосовое. Пожалуйста, повтори или напиши текстом.")
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_food_text(message: Message):
-    user_id = message.from_user.id
-    text = message.text
-
-    parts = [{"text": f"Пользователь съел: '{text}'. Посчитай калории и БЖУ."}]
-
-    try:
-        res = await llm_service.generate_response(
-            contents_or_parts=parts,
-            system_instruction=NUTRITION_SYSTEM_PROMPT,
-            action_type="meal_text",
-            enable_web_search=True
-        )
-        parsed = clean_and_parse_json(res["text"])
-
-        async with AsyncSessionLocal() as session:
-            await log_token_usage(session, user_id, res["model_used"], res["tokens"], "meal_text")
-            await save_meal(session, user_id, "text", text, parsed)
-            user = await session.get(User, user_id)
-            user_now = get_user_now(user.timezone)
-            cals_today = await get_today_calories(session, user_id, user_now.date())
-
-        rem = user.daily_calories_target - cals_today
-        await message.answer(
-            f"✍ Записал: **{parsed['dish_name']}**\n"
-            f"• Калории: **+{parsed['calories']} ккал**\n"
-            f"• БЖУ: Б: {parsed['protein']}г | Ж: {parsed['fat']}г | У: {parsed['carbs']}г\n\n"
-            f"💬 _{parsed['comment']}_\n\n"
-            f"📊 На сегодня: **{cals_today} / {user.daily_calories_target} ккал** (осталось {rem} ккал)"
-        )
-    except Exception as e:
-        logger.error(f"Error handling text: {e}")
-        await message.answer("Не получилось обработать запись. Попробуй уточнить блюдо.")
+    parts = [{"text": message.text}]
+    await process_food(
+        message, parts,
+        input_type="text",
+        raw_query=message.text,
+        action_type="meal_text",
+        icon="✍",
+        prefix="Записал"
+    )
 
 # --- UTILS ---
 

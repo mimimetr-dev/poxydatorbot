@@ -15,6 +15,8 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "sqlite+aiosqlite:///poxydator.db"
 
+    ENABLE_WEB_SEARCH: bool = True
+
     ENABLE_TELEGRAM_STARS: bool = False
     ENABLE_CARD_PAYMENTS: bool = False
     PAYMENT_PROVIDER_TOKEN: Optional[str] = None
