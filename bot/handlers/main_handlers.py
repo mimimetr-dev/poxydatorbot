@@ -350,9 +350,7 @@ async def process_monthly_measurement(message: Message, state: FSMContext):
 
 def format_meal_card(parsed: dict, cals_today: int, target: int, icon: str, prefix: str = "Записал") -> str:
     rem = target - cals_today
-    search_note = ""
-    if "поиск" in (parsed.get("comment") or "").lower() or "Нашёл" in (parsed.get("comment") or ""):
-        search_note = "\n🌐 _Данные уточнены через Google-поиск._"
+    search_note = "\n🌐 _Данные уточнены через Google-поиск._" if parsed.get("used_search") else ""
     return (
         f"{icon} {prefix}: **{parsed['dish_name']}**\n"
         f"• Калории: **+{parsed['calories']} ккал**\n"

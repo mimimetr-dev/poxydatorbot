@@ -127,6 +127,7 @@ async def analyze(
     })
 
     parsed = _normalize(parse_json(first["text"]))
+    parsed["used_search"] = False
 
     needs_second_pass = parsed["is_food"] and (
         parsed["needs_search"] or parsed["confidence"] == "low"
@@ -160,6 +161,7 @@ async def analyze(
         refined = _normalize(parse_json(second["text"]))
         # Keep the refined result only if it looks sane
         if refined["is_food"] and refined["calories"] > 0:
+            refined["used_search"] = True
             return refined, usages
     except Exception as e:
         logger.warning(f"Web-search refinement failed, using first pass: {e}")

@@ -6,6 +6,9 @@ from bot.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Web-search grounded calls can take 30-60+ seconds, so keep a generous read timeout.
+CLIENT_TIMEOUT = httpx.Timeout(180.0, connect=15.0, write=30.0)
+
 
 def extract_gemini_text(candidate: Dict[str, Any]) -> str:
     """Joins all text parts of a Gemini candidate, skipping thought parts."""
@@ -49,7 +52,7 @@ class LLMService:
         if tools:
             payload["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=CLIENT_TIMEOUT) as client:
             resp = await client.post(url, headers=headers, json=payload)
             if resp.status_code != 200:
                 raise RuntimeError(f"Comet Gemini API error HTTP {resp.status_code}: {resp.text}")
@@ -68,10 +71,9 @@ class LLMService:
         }
         payload = {
             "model": model,
-            "messages": messages,
-            "temperature": 0.4
+            "messages": messages
         }
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=CLIENT_TIMEOUT) as client:
             resp = await client.post(url, headers=headers, json=payload)
             if resp.status_code != 200:
                 raise RuntimeError(f"Comet OpenAI API error HTTP {resp.status_code}: {resp.text}")
@@ -122,7 +124,10 @@ class LLMService:
                 "model_used": self.primary_model
             }
         except Exception as e:
-            logger.warning(f"Primary model {self.primary_model} failed: {e}. Attempting fallback {self.fallback_model}")
+            logger.warning(
+                f"Primary model {self.primary_model} failed: {type(e).__name__}: {e!r}. "
+                f"Attempting fallback {self.fallback_model}"
+            )
 
         # 2. Try Fallback (gpt-6-luna via OpenAI format)
         try:
