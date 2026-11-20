@@ -20,6 +20,25 @@ from bot.services.typing import typing_indicator
 logger = logging.getLogger(__name__)
 router = Router()
 
+HELP_TEXT = (
+    "🍏 **Как со мной работать**\n\n"
+    "**Просто присылай еду — любым удобным способом:**\n"
+    "📸 фото блюда — распознаю состав и посчитаю КБЖУ\n"
+    "🎙 голосовое — пойму на слух\n"
+    "✍ текст — например «омлет из 3 яиц и тост»\n\n"
+    "Если данных мало или продукт брендовый — сам уточню через Google-поиск.\n"
+    "Любой вопрос словами тоже можно задать: я отвечу, а не запишу в дневник.\n\n"
+    "**Команды:**\n"
+    "/status — баланс калорий за сегодня\n"
+    "/plan — мой план, норма и прогресс\n"
+    "/summary — итог дня и саммари\n"
+    "/measure — внести вес и талию (раз в 30 дней)\n"
+    "/tokens — сколько токенов израсходовано\n"
+    "/reset — пройти знакомство заново\n"
+    "/help — эта справка\n\n"
+    "Работаем только на дефиците калорий: без спортзала и ежедневных взвешиваний 🙂"
+)
+
 # Helper to log tokens
 async def log_token_usage(session, user_id: int, model: str, tokens: dict, action: str):
     tu = TokenUsage(
@@ -53,13 +72,7 @@ async def cmd_start(message: Message, state: FSMContext):
             await message.answer(
                 f"Рад снова видеть тебя, {user.first_name or ''}!\n\n"
                 f"Твой дневной лимит: **{user.daily_calories_target} ккал**.\n"
-                "Присылай фото еды, голосовое или текст — я всё посчитаю.\n\n"
-                "Команды:\n"
-                "/status — баланс калорий за сегодня\n"
-                "/tokens — статистика потраченных токенов\n"
-                "/summary — саммари сегодняшнего дня\n"
-                "/measure — внести контрольные замеры\n"
-                "/reset — пройти знакомство заново"
+                "Присылай фото еды, голосовое или текст — я всё посчитаю.\n\n" + HELP_TEXT
             )
             return
 
@@ -428,9 +441,71 @@ async def cmd_tokens(message: Message):
             f"• **Итого потрачено токенов: {total}**"
         )
 
+@router.message(Command("plan"))
+async def cmd_plan(message: Message):
+    user_id = message.from_user.id
+    async with AsyncSessionLocal() as session:
+        user = await session.get(User, user_id)
+        if not user or not user.is_onboarded:
+            await message.answer("Сначала пройди знакомство — нажми /start 🙂")
+            return
+
+        last = await session.execute(
+            select(Measurement)
+            .where(Measurement.telegram_id == user_id)
+            .order_by(Measurement.date.desc())
+            .limit(1)
+        )
+        m = last.scalar_one_or_none()
+        weight = m.weight_kg if m else None
+
+        if weight and user.height_cm and user.age:
+            is_male = (user.gender == "male")
+            bmr = 10 * weight + 6.25 * user.height_cm - 5 * user.age + (5 if is_male else -161)
+            tdee = bmr * (user.activity_coefficient or 1.2)
+        else:
+            bmr = tdee = None
+
+        lines = ["🎯 **Твой план**\n"]
+        if weight:
+            left = weight - (user.target_weight_kg or weight)
+            lines.append(f"• Текущий вес: **{weight:g} кг**")
+            lines.append(f"• Цель: **{user.target_weight_kg:g} кг** (осталось {left:.1f} кг)")
+        lines.append(f"• Норма: **{user.daily_calories_target} ккал/день**")
+        lines.append(f"• Белок: ~{user.daily_protein_target} г")
+        if bmr:
+            lines.append("")
+            lines.append(f"• BMR (Миффлин — Сан Жеор): {int(bmr)} ккал")
+            lines.append(f"• Коэффициент активности: {user.activity_coefficient:g}")
+            lines.append(f"• TDEE (расход): {int(tdee)} ккал")
+            lines.append(f"• Дефицит: {user.deficit_percent}% ({int(tdee - user.daily_calories_target)} ккал)")
+        if user.next_checkin_date:
+            lines.append("")
+            lines.append(f"📅 Следующий замер: **{user.next_checkin_date.strftime('%d.%m.%Y')}**")
+
+        # Today's balance
+        today = get_user_now(user.timezone).date()
+        eaten = await get_today_calories(session, user_id, today)
+        lines.append("")
+        lines.append(f"Сегодня: {eaten} / {user.daily_calories_target} ккал (осталось {user.daily_calories_target - eaten})")
+
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("summary"))
+async def cmd_summary(message: Message):
+    from bot.services.scheduler import generate_and_send_summary
+    await message.answer("Собираю итоги дня…")
+    await generate_and_send_summary(message.bot, message.from_user.id, force=True)
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message):
+    await message.answer(HELP_TEXT)
+
+
 @router.message(Command("reset"))
-async def cmd_reset(message: Message, state: FSMContext):
-    await message.answer(
+async def cmd_reset(message: Message, state: FSMContext):    await message.answer(
         "Сбросить профиль и пройти знакомство заново?\n\n"
         "_История приёмов пищи, замеров и токенов сохранится._",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[

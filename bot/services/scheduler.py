@@ -21,7 +21,7 @@ SUMMARY_PROMPT = """Ты заботливый, но честный персон�
 Длина сообщения: до 4-5 предложений. Будь живым и мотивирующим.
 """
 
-async def generate_and_send_summary(bot: Bot, user_id: int):
+async def generate_and_send_summary(bot: Bot, user_id: int, force: bool = False):
     async with AsyncSessionLocal() as session:
         user = await session.get(User, user_id)
         if not user or not user.is_onboarded:
@@ -34,8 +34,12 @@ async def generate_and_send_summary(bot: Bot, user_id: int):
         existing = await session.execute(
             select(DailySummary).where(DailySummary.telegram_id == user_id, DailySummary.date == today)
         )
-        if existing.scalar_one_or_none():
+        existing_row = existing.scalar_one_or_none()
+        if existing_row and not force:
             return
+        if existing_row and force:
+            await session.delete(existing_row)
+            await session.commit()
 
         # Fetch meals for today
         meals_res = await session.execute(
