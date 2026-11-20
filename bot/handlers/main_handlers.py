@@ -33,7 +33,6 @@ HELP_TEXT = (
     "/plan — мой план, норма и прогресс\n"
     "/summary — итог дня и саммари\n"
     "/measure — внести вес и талию (раз в 30 дней)\n"
-    "/tokens — сколько токенов израсходовано\n"
     "/reset — пройти знакомство заново\n"
     "/help — эта справка\n\n"
     "Работаем только на дефиците калорий: без спортзала и ежедневных взвешиваний 🙂"
@@ -418,28 +417,6 @@ async def cmd_status(message: Message):
             status_msg += " Лимит превышен, но ничего критичного. Завтра вернемся в норму."
 
         await message.answer(status_msg)
-
-@router.message(Command("tokens"))
-async def cmd_tokens(message: Message):
-    user_id = message.from_user.id
-    async with AsyncSessionLocal() as session:
-        res = await session.execute(
-            select(
-                func.coalesce(func.sum(TokenUsage.prompt_tokens), 0),
-                func.coalesce(func.sum(TokenUsage.completion_tokens), 0),
-                func.coalesce(func.sum(TokenUsage.total_tokens), 0),
-                func.count(TokenUsage.id)
-            ).where(TokenUsage.telegram_id == user_id)
-        )
-        p_tok, c_tok, total, calls = res.one()
-
-        await message.answer(
-            f"📈 **Статистика токенов Comet API:**\n\n"
-            f"• Всего обращений к моделям: **{calls}**\n"
-            f"• Prompt токенов (вход): **{p_tok}**\n"
-            f"• Completion токенов (ответ): **{c_tok}**\n"
-            f"• **Итого потрачено токенов: {total}**"
-        )
 
 @router.message(Command("plan"))
 async def cmd_plan(message: Message):

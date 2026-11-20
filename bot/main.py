@@ -36,7 +36,6 @@ BOT_COMMANDS = [
     BotCommand(command="plan", description="Мой план и норма калорий"),
     BotCommand(command="summary", description="Итог дня и саммари"),
     BotCommand(command="measure", description="Внести вес и талию"),
-    BotCommand(command="tokens", description="Расход токенов модели"),
     BotCommand(command="reset", description="Пройти знакомство заново"),
     BotCommand(command="help", description="Что умеет бот"),
 ]
