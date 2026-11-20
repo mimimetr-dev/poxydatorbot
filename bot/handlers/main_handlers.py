@@ -58,7 +58,8 @@ async def cmd_start(message: Message, state: FSMContext):
                 "/status — баланс калорий за сегодня\n"
                 "/tokens — статистика потраченных токенов\n"
                 "/summary — саммари сегодняшнего дня\n"
-                "/measure — внести контрольные замеры"
+                "/measure — внести контрольные замеры\n"
+                "/reset — пройти знакомство заново"
             )
             return
 
@@ -327,8 +328,42 @@ async def cmd_tokens(message: Message):
             f"• **Итого потрачено токенов: {total}**"
         )
 
-# --- MONTHLY MEASUREMENT ---
+@router.message(Command("reset"))
+async def cmd_reset(message: Message, state: FSMContext):
+    await message.answer(
+        "Сбросить профиль и пройти знакомство заново?\n\n"
+        "_История приёмов пищи, замеров и токенов сохранится._",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Да, сбросить", callback_data="reset_confirm")],
+            [InlineKeyboardButton(text="Отмена", callback_data="reset_cancel")],
+        ])
+    )
 
+
+@router.callback_query(F.data == "reset_confirm")
+async def process_reset_confirm(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    async with AsyncSessionLocal() as session:
+        user = await session.get(User, callback.from_user.id)
+        if user:
+            user.is_onboarded = False
+            user.next_checkin_date = None
+            await session.commit()
+
+    await state.clear()
+    with contextlib.suppress(Exception):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Профиль сброшен. Напиши /start, чтобы пройти знакомство заново.")
+
+
+@router.callback_query(F.data == "reset_cancel")
+async def process_reset_cancel(callback: CallbackQuery):
+    await callback.answer("Отменено")
+    with contextlib.suppress(Exception):
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+
+# --- MONTHLY MEASUREMENT ---
 @router.message(Command("measure"))
 async def cmd_measure(message: Message, state: FSMContext):
     await state.set_state(MeasurementStates.waiting_for_monthly_data)
