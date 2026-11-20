@@ -8,6 +8,7 @@ from bot.database.db import AsyncSessionLocal
 from bot.database.models import User, Meal, DailySummary, TokenUsage
 from bot.services.llm import llm_service
 from bot.services.time_utils import get_user_now
+from bot.services.typing import typing_indicator
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +53,12 @@ async def generate_and_send_summary(bot: Bot, user_id: int):
         ]
 
         try:
-            res = await llm_service.generate_response(
-                contents_or_parts=content,
-                system_instruction=SUMMARY_PROMPT,
-                action_type="daily_summary"
-            )
+            async with typing_indicator(bot, user_id, interval=4.5):
+                res = await llm_service.generate_response(
+                    contents_or_parts=content,
+                    system_instruction=SUMMARY_PROMPT,
+                    action_type="daily_summary"
+                )
             summary_text = res["text"]
 
             # Save summary & tokens

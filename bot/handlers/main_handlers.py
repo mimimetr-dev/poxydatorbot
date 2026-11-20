@@ -1,4 +1,5 @@
 ﻿import base64
+import contextlib
 import json
 import logging
 from datetime import date, datetime, timedelta
@@ -14,6 +15,7 @@ from bot.database.models import User, Measurement, Meal, DailySummary, TokenUsag
 from bot.handlers.states import OnboardingStates, MeasurementStates
 from bot.services import nutrition as nutrition_service
 from bot.services.time_utils import calculate_offset_from_user_time, find_timezone_by_offset, get_user_now
+from bot.services.typing import typing_indicator
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -60,13 +62,57 @@ async def cmd_start(message: Message, state: FSMContext):
             )
             return
 
+    await state.set_state(OnboardingStates.waiting_for_ready)
+    await message.answer(
+        "Привет! Я твой персональный наставник по похудению 👋\n\n"
+        "Работаем просто и без стресса: **только дефицит калорий** — без изнурительных тренировок "
+        "и без ежедневных взвешиваний. Ты присылаешь фото еды, голосовое или текст, а я считаю калории "
+        "и слежу, чтобы дефицит соблюдался.\n\n"
+        "**Для старта мне нужно подготовить твои данные.** Это займёт 1–2 минуты:\n"
+        "• часовой пояс (определю сам по текущему времени)\n"
+        "• пол, возраст, рост\n"
+        "• текущий вес и обхват талии\n"
+        "• целевой вес\n\n"
+        "На основе этого я посчитаю твою личную норму калорий.\n\n"
+        "Когда будешь готов — напиши **«готов»** 👇",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Готов ✅", callback_data="onboard_ready")]
+        ])
+    )
+
+
+async def _ask_time(message: Message, state: FSMContext):
     await state.set_state(OnboardingStates.waiting_for_time)
     await message.answer(
-        "Привет! Я твой персональный наставник по похудению.\n\n"
-        "Мы работаем просто и без стресса: **только дефицит калорий**, без изнурительных тренировок и без ежедневных взвешиваний.\n\n"
-        "Давай настроимся под тебя. **Сколько у тебя сейчас времени?**\n"
-        "(Напиши например `14:35` или `9:10`, я автоматически определю часовой пояс)"
+        "Отлично, поехали! 🚀\n\n"
+        "**Шаг 1 из 7. Сколько у тебя сейчас времени?**\n"
+        "Напиши, например, `14:35` — по разнице с серверным временем я определю твой часовой пояс "
+        "и буду присылать вечерние итоги именно по твоим часам."
     )
+
+
+@router.callback_query(OnboardingStates.waiting_for_ready, F.data == "onboard_ready")
+async def process_ready_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    with contextlib.suppress(Exception):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await _ask_time(callback.message, state)
+
+
+@router.message(OnboardingStates.waiting_for_ready)
+async def process_ready_text(message: Message, state: FSMContext):
+    text = (message.text or "").strip().lower()
+    if text in ("готов", "готова", "готовы", "да", "поехали", "старт", "start", "го", "ок", "окей"):
+        await _ask_time(message, state)
+        return
+
+    await message.answer(
+        "Как будешь готов — просто напиши **«готов»**, и я начну задавать вопросы 🙂",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Готов ✅", callback_data="onboard_ready")]
+        ])
+    )
+
 
 @router.message(OnboardingStates.waiting_for_time)
 async def process_time(message: Message, state: FSMContext):
@@ -87,7 +133,7 @@ async def process_time(message: Message, state: FSMContext):
     await state.set_state(OnboardingStates.waiting_for_gender)
     await message.answer(
         f"Супер! Определил твой часовой пояс: **{tz_name}** (UTC{'+' if offset>=0 else ''}{offset:g}ч).\n\n"
-        "Укажи твой пол:",
+        "**Шаг 2 из 7.** Укажи твой пол:",
         reply_markup=kb
     )
 
@@ -98,7 +144,7 @@ async def process_gender(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_reply_markup(reply_markup=None)
     
     await state.set_state(OnboardingStates.waiting_for_age)
-    await callback.message.answer("Сколько тебе полных лет?")
+    await callback.message.answer("**Шаг 3 из 7.** Сколько тебе полных лет?")
 
 @router.message(OnboardingStates.waiting_for_age)
 async def process_age(message: Message, state: FSMContext):
@@ -112,7 +158,7 @@ async def process_age(message: Message, state: FSMContext):
 
     await state.update_data(age=age)
     await state.set_state(OnboardingStates.waiting_for_height)
-    await message.answer("Твой рост в сантиметрах (например, `178`):")
+    await message.answer("**Шаг 4 из 7.** Твой рост в сантиметрах (например, `178`):")
 
 @router.message(OnboardingStates.waiting_for_height)
 async def process_height(message: Message, state: FSMContext):
@@ -126,7 +172,7 @@ async def process_height(message: Message, state: FSMContext):
 
     await state.update_data(height=height)
     await state.set_state(OnboardingStates.waiting_for_weight)
-    await message.answer("Текущий вес в килограммах (например, `84.5`):")
+    await message.answer("**Шаг 5 из 7.** Текущий вес в килограммах (например, `84.5`):")
 
 @router.message(OnboardingStates.waiting_for_weight)
 async def process_weight(message: Message, state: FSMContext):
@@ -140,7 +186,7 @@ async def process_weight(message: Message, state: FSMContext):
 
     await state.update_data(weight=weight)
     await state.set_state(OnboardingStates.waiting_for_waist)
-    await message.answer("Обхват талии в сантиметрах (в самом узком месте или на уровне пупка, например `92`):")
+    await message.answer("**Шаг 6 из 7.** Обхват талии в сантиметрах (в самом узком месте или на уровне пупка, например `92`):")
 
 @router.message(OnboardingStates.waiting_for_waist)
 async def process_waist(message: Message, state: FSMContext):
@@ -154,7 +200,7 @@ async def process_waist(message: Message, state: FSMContext):
 
     await state.update_data(waist=waist)
     await state.set_state(OnboardingStates.waiting_for_target)
-    await message.answer("Какой твой целевой желаемый вес в кг?")
+    await message.answer("**Шаг 7 из 7.** Какой твой целевой желаемый вес в кг?")
 
 @router.message(OnboardingStates.waiting_for_target)
 async def process_target(message: Message, state: FSMContext):
@@ -374,7 +420,8 @@ async def process_food(
     """Common pipeline: analyze -> log tokens -> save meal or answer a question."""
     user_id = message.from_user.id
     try:
-        parsed, usages = await nutrition_service.analyze(parts, action_type=action_type)
+        async with typing_indicator(message.bot, message.chat.id):
+            parsed, usages = await nutrition_service.analyze(parts, action_type=action_type)
 
         async with AsyncSessionLocal() as session:
             for u in usages:

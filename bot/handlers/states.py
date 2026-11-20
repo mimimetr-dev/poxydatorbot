@@ -1,6 +1,7 @@
 from aiogram.fsm.state import State, StatesGroup
 
 class OnboardingStates(StatesGroup):
+    waiting_for_ready = State()
     waiting_for_time = State()
     waiting_for_gender = State()
     waiting_for_age = State()
